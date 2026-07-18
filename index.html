@@ -145,6 +145,11 @@
     @media (max-width:860px) and (orientation:portrait){
       .rotate-hint{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:28px;color:var(--text-dim);font-size:13px;letter-spacing:0.02em;}
       .rotate-hint svg{flex-shrink:0;animation:rotate-hint-swing 2.2s ease-in-out infinite;}
+      /* Stack the two dual-scrub videos only in portrait — side by side
+         (like desktop) whenever the phone is rotated to landscape, since
+         there's enough width there for both halves to read comfortably. */
+      .scrub-dual-row{flex-direction:column;}
+      .scrub-video-half{width:100%;height:50%;}
     }
     @keyframes rotate-hint-swing{0%,100%{transform:rotate(0deg);}50%{transform:rotate(-90deg);}}
 
@@ -218,8 +223,6 @@
       .gal-9{grid-column:span 2;grid-row:span 2;}
       .ficha-grid{grid-template-columns:1fr;column-gap:0;}
       .h2{margin-bottom:34px;}
-      .scrub-dual-row{flex-direction:column;}
-      .scrub-video-half{width:100%;height:50%;}
       .overlap-section{margin-top:-8vh;border-radius:20px 20px 0 0;}
     }
     @media (max-width: 420px){
