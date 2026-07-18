@@ -3,6 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chevrolet Onix Plus Premier II 2020 · R$ 62.990</title>
+<meta name="description" content="Vermelho Carmim · Motor 1.0 Turbo 116cv · Câmbio automático de 6 marchas · 115.000 km. A versão topo de linha do Onix Plus, por R$ 62.990.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://danieltf100.github.io/onix-portfolio/">
+<meta property="og:title" content="Chevrolet Onix Plus Premier II 2020 · R$ 62.990">
+<meta property="og:description" content="Vermelho Carmim · Motor 1.0 Turbo 116cv · Câmbio automático de 6 marchas · 115.000 km. A versão topo de linha do Onix Plus, por R$ 62.990.">
+<meta property="og:image" content="https://danieltf100.github.io/onix-portfolio/assets/optimized/frente_diagonal_direita_rua_16x9.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Chevrolet Onix Plus Premier II 2020 · R$ 62.990">
+<meta name="twitter:description" content="Vermelho Carmim · Motor 1.0 Turbo 116cv · Câmbio automático de 6 marchas · 115.000 km. A versão topo de linha do Onix Plus, por R$ 62.990.">
+<meta name="twitter:image" content="https://danieltf100.github.io/onix-portfolio/assets/optimized/frente_diagonal_direita_rua_16x9.jpg">
 <script src="./support.js"></script>
 </head>
 <body class="loading-lock">
@@ -15,13 +26,22 @@
   <script src="./image-slot.js"></script>
   <style>
     *{box-sizing:border-box;}
-    /* overflow-x lives on html/body, NOT on .page: an overflow-x set on
-       .page would force its overflow-y to an implicit 'auto' (CSS spec
-       quirk when only one axis is 'visible'), turning .page into its own
-       scroll container — which breaks position:sticky on every .scrub-pin
-       inside it (sticky would then anchor to that inner container, which
-       never scrolls, instead of the real viewport). */
-    html, body{overflow-x:hidden;touch-action:pan-y;}
+    /* overflow-x lives ONLY on <html>, never on .page or body: setting
+       overflow-x on an element while its overflow-y is left unset forces
+       that overflow-y to an implicit 'auto' (CSS spec quirk), turning THAT
+       element into its own nested scroll container. <html> has nothing
+       above it, so it's the only safe place for this — putting it on
+       `body` too (as this rule used to) made body a second, nested scroll
+       container distinct from `document.documentElement`/`window`, which
+       is who native `position:sticky`, GSAP's `pin`, and `window.scrollY`
+       all assume is "the" scroller. That mismatch is very likely why touch
+       scrolling on real phones never drove the video/caption updates: the
+       page visually scrolled via body's own inner scroll box while
+       everything reading scroll position kept watching the (functionally
+       frozen) outer one. Confirmed directly: with overflow-x only on
+       html, `document.documentElement.scrollHeight` now matches
+       `document.body.scrollHeight` and `window.scrollY` updates correctly. */
+    html{overflow-x:hidden;touch-action:pan-y;}
     body{margin:0;background:#0c0b0d;}
     /* Locked by default so nothing scrolls "behind" the loading overlay
        before _setupScrubVideos has wired up scroll-scrubbing; released once
@@ -50,6 +70,16 @@
 
     /* SCRUB SECTIONS (scroll-scrubbed video, GTA6-style) */
     .scrub-wrap{position:relative;}
+    /* Tried GSAP's own `pin:true` here instead of CSS sticky (in case
+       sticky's browser-driven recompute was the reason touch-scroll never
+       updated the video on real phones) — reverted: pin:true wraps the
+       pinned element in a "pin-spacer" and reparents it into that wrapper,
+       and that DOM move made the <video> lose its buffered/seekable range
+       (confirmed: video.seekable stayed {0,0} indefinitely after the
+       reparent, even at readyState 4), so currentTime seeks silently did
+       nothing. The actual root cause of the touch bug turned out to be
+       elsewhere (see the html/body overflow-x comment below) — sticky
+       never had this problem since it never moves the element in the DOM. */
     .scrub-pin{position:sticky;top:0;height:100vh;min-height:520px;overflow:hidden;touch-action:pan-y;}
     /* touch-action doesn't inherit, and <video> elements can get their own
        default touch handling from the browser — set it explicitly here too
