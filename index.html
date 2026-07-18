@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="./support.js"></script>
 </head>
-<body>
+<body class="loading-lock">
 <x-dc>
 <helmet>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -23,11 +23,30 @@
        never scrolls, instead of the real viewport). */
     html, body{overflow-x:hidden;touch-action:pan-y;}
     body{margin:0;background:#0c0b0d;}
+    /* Locked by default so nothing scrolls "behind" the loading overlay
+       before _setupScrubVideos has wired up scroll-scrubbing; released once
+       the overlay's readiness check resolves (see .loading-overlay below). */
+    body.loading-lock{overflow:hidden;}
     ::selection{background:#8a1f2b;color:#fff;}
     a{color:var(--accent);text-decoration:none;}
     a:hover{color:var(--accent-bright);}
 
     .page{background:var(--bg);color:var(--text);font-family:'Manrope',sans-serif;width:100%;}
+
+    /* LOADING OVERLAY — shown until every .scrub-video reaches 'canplay'
+       (or an 8s safety timeout elapses), so the GTA6-style scroll-scrubbing
+       never starts against a video with no buffered frames. */
+    .loading-overlay{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;gap:22px;background:#0c0b0d;
+      transition:opacity .6s ease;}
+    .loading-overlay.is-ready{opacity:0;pointer-events:none;}
+    .loading-spinner{width:40px;height:40px;border-radius:50%;
+      border:2px solid rgba(242,236,226,0.15);border-top-color:#8a1f2b;
+      animation:loading-spin .8s linear infinite;}
+    @keyframes loading-spin{to{transform:rotate(360deg);}}
+    @media (prefers-reduced-motion:reduce){.loading-spinner{animation:none;}}
+    .loading-text{font-family:'Marcellus',serif;font-size:clamp(16px,2.4vw,20px);
+      color:#f2ece2;letter-spacing:0.04em;}
 
     /* SCRUB SECTIONS (scroll-scrubbed video, GTA6-style) */
     .scrub-wrap{position:relative;}
@@ -180,6 +199,11 @@
 </helmet>
 
 <div class="page" style="--bg:{{bg}};--bg-alt:{{bgAlt}};--text:{{text}};--text-dim:{{textDim}};--line:{{line}};--accent:{{accent}};--accent-bright:{{accentBright}};">
+
+  <div class="loading-overlay" id="loading-overlay" role="status" aria-live="polite">
+    <div class="loading-spinner" aria-hidden="true"></div>
+    <div class="loading-text">Carregando experiência</div>
+  </div>
 
   <!-- COVER: opening title card, a beat before the Hero video starts -->
   <section class="pin-wrap" id="cover" style="height:160vh;">
@@ -631,10 +655,54 @@ class Component extends DCLogic {
     const init = () => { this._setupAnimations(); this._setupScrubVideos(); this._setupOverlapSections(); };
     if (document.readyState === 'complete') init();
     else window.addEventListener('load', init, { once: true });
+    // NOT deferred to window `load` like the above: with 10 preload="auto"
+    // videos, `load` can be blocked for a very long time on a slow
+    // connection (confirmed — it can fail to fire at all within a minute
+    // under throttling), which would strand the overlay long after the
+    // videos are actually playable. Runs immediately instead.
+    this._setupLoadingOverlay();
   }
 
   componentWillUnmount() {
     if (this._scrollTriggers) this._scrollTriggers.forEach((st) => st.kill());
+  }
+
+  // Loading overlay: hides itself once every .scrub-video has enough data
+  // buffered to play ('canplay'/readyState >= HAVE_FUTURE_DATA), so scroll
+  // -scrubbing never starts against a video with no frames yet. An 8s
+  // safety timeout releases the overlay regardless — a stalled connection
+  // or a broken source must never strand the page behind it.
+  //
+  // Listens on `document` (capture phase — 'canplay' doesn't bubble)
+  // instead of on the video elements directly: the DC runtime's own
+  // post-mount DOM swap (see componentDidMount's comment) can detach/
+  // recreate the initial video nodes, which would silently drop any
+  // listener bound to them. A document-level listener survives that swap,
+  // and re-querying '.scrub-video' on every check reads whatever nodes are
+  // live at that moment rather than trusting stale references.
+  _setupLoadingOverlay() {
+    const overlay = document.getElementById('loading-overlay');
+    if (!overlay) return;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      document.removeEventListener('canplay', check, true);
+      clearTimeout(timeoutId);
+      overlay.classList.add('is-ready');
+      document.body.classList.remove('loading-lock');
+      overlay.addEventListener('transitionend', () => overlay.remove(), { once: true });
+      // Fallback in case 'transitionend' never fires (e.g. reduced-motion
+      // browsers that skip the opacity transition entirely).
+      setTimeout(() => overlay.remove(), 900);
+    };
+    const check = () => {
+      const videos = document.querySelectorAll('.scrub-video');
+      if (videos.length && Array.from(videos).every((v) => v.readyState >= 3)) finish();
+    };
+    document.addEventListener('canplay', check, true);
+    const timeoutId = setTimeout(finish, 8000);
+    check();
   }
 
   // Smooth scroll-triggered reveals for the non-video sections (Intro,
