@@ -1,0 +1,11 @@
+node_modules/
+package.json
+package-lock.json
+scripts/
+.thumbnail
+
+# Raw source media (originals used to produce assets/optimized/*) — not served by the site
+assets/*.HEIC
+assets/*.MOV
+assets/noturno/
+.claude/

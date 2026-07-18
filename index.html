@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Marcellus&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="./vendor/gsap/gsap.min.js"></script>
+  <script src="./vendor/gsap/ScrollTrigger.min.js"></script>
+  <script src="./image-slot.js"></script>
+  <style>
+    *{box-sizing:border-box;}
+    /* overflow-x lives on html/body, NOT on .page: an overflow-x set on
+       .page would force its overflow-y to an implicit 'auto' (CSS spec
+       quirk when only one axis is 'visible'), turning .page into its own
+       scroll container — which breaks position:sticky on every .scrub-pin
+       inside it (sticky would then anchor to that inner container, which
+       never scrolls, instead of the real viewport). */
+    html, body{overflow-x:hidden;touch-action:pan-y;}
+    body{margin:0;background:#0c0b0d;}
+    ::selection{background:#8a1f2b;color:#fff;}
+    a{color:var(--accent);text-decoration:none;}
+    a:hover{color:var(--accent-bright);}
+
+    .page{background:var(--bg);color:var(--text);font-family:'Manrope',sans-serif;width:100%;}
+
+    /* SCRUB SECTIONS (scroll-scrubbed video, GTA6-style) */
+    .scrub-wrap{position:relative;}
+    .scrub-pin{position:sticky;top:0;height:100vh;min-height:520px;overflow:hidden;touch-action:pan-y;}
+    /* touch-action doesn't inherit, and <video> elements can get their own
+       default touch handling from the browser — set it explicitly here too
+       so a touch-drag starting directly on the video always resolves to a
+       real page scroll instead of being claimed for something else. */
+    .scrub-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#050405;touch-action:pan-y;}
+    .scrub-scrim{position:absolute;inset:0;background:linear-gradient(180deg, rgba(5,4,5,0.25) 0%, rgba(5,4,5,0.5) 55%, rgba(5,4,5,0.92) 100%);pointer-events:none;}
+    /* Two vertical clips side by side on desktop — each half's box ratio
+       (~4:5) sits close enough to the 9:16 source that `cover` only trims
+       a little off the sides, instead of the big pillarbox bars a single
+       full-width 9:16 video would need. */
+    .scrub-dual-row{position:absolute;inset:0;display:flex;}
+    .scrub-video-half{position:relative;width:50%;height:100%;overflow:hidden;touch-action:pan-y;}
+    .scrub-caption{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;justify-content:center;padding:0 6vw;max-width:1100px;opacity:0;pointer-events:none;}
+    .scrub-hint{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);z-index:3;font-size:10px;letter-spacing:0.3em;text-transform:uppercase;color:var(--text-dim);}
+    .eyebrow{font-size:13px;letter-spacing:0.35em;text-transform:uppercase;color:var(--accent-bright);margin-bottom:18px;}
+    .scrub-title{font-family:'Marcellus',serif;font-size:clamp(38px,8vw,92px);line-height:1.02;margin:0 0 22px;font-weight:400;color:var(--accent-bright);}
+    .scrub-desc{font-size:clamp(16px,2.6vw,21px);color:var(--text-dim);max-width:620px;margin:0;line-height:1.65;font-weight:300;}
+    .scrub-heading{font-family:'Marcellus',serif;font-size:clamp(28px,4.6vw,50px);font-weight:400;margin:0 0 22px;}
+    .scrub-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:14px;color:var(--text);font-weight:300;font-size:clamp(15px,1.8vw,18px);line-height:1.5;max-width:460px;}
+    .scrub-list li{padding-left:22px;position:relative;}
+    .scrub-list li::before{content:'';position:absolute;left:0;top:0.55em;width:10px;height:1px;background:var(--accent-bright);}
+    .price-block{display:flex;align-items:baseline;gap:10px;border-left:2px solid var(--accent);padding-left:20px;}
+    .price{font-family:'Marcellus',serif;font-size:clamp(28px,6vw,44px);color:var(--text);}
+    .meta-list{display:flex;gap:20px;font-size:14px;color:var(--text-dim);letter-spacing:0.02em;flex-wrap:wrap;margin-top:24px;}
+    .meta-list .sep{opacity:0.4;}
+
+    /* Overlap-parallax: the section right after a scrub video slides up
+       and covers it (still pinned underneath) instead of just continuing
+       the ordinary scroll. The negative margin lets it start entering
+       earlier than its natural flow position; _setupOverlapSections()
+       eases a matching translateY back to 0 as it settles. */
+    .overlap-section{position:relative;z-index:5;background:var(--bg);border-radius:32px 32px 0 0;box-shadow:0 -60px 90px -30px rgba(0,0,0,0.55);margin-top:-14vh;}
+    .overlap-section.section-alt{border-top:none;}
+
+    /* Generic sticky pin for non-video content (Ficha Técnica): same
+       position:sticky trick as .scrub-pin, so a later .overlap-section can
+       slide up and cover it while it holds in place — without attaching
+       the video-scrub JS (_setupScrubVideos only targets .scrub-wrap). */
+    .pin-wrap{position:relative;}
+    .pin-pin{position:sticky;top:0;min-height:100vh;display:flex;align-items:center;overflow:hidden;touch-action:pan-y;}
+
+    /* Night divider: black title card marking the start of the night
+       sequence, slides up over the still-pinned Ficha Técnica above it. */
+    .night-divider.overlap-section{background:#050405;min-height:60vh;display:flex;align-items:center;justify-content:center;text-align:center;padding:80px 6vw;}
+    .night-divider h2{margin:0;}
+
+    /* Opening cover: black title card before the Hero scrub, a beat of
+       anticipation before the video starts. Plain .pin-wrap/.pin-pin (not
+       .overlap-section) — the Hero's own .scrub-pin sits right after it in
+       normal flow and slides up to cover it on its own, the same way every
+       other pair of consecutive .scrub-wrap sections already does. Giving
+       THIS element a GSAP transform instead would create a new containing
+       block and break the Hero's sticky pin (any transform value, even
+       translateY(0), does this per spec — not just non-zero ones). */
+    .cover-content{background:#050405;flex-direction:column;justify-content:center;text-align:center;padding:80px 6vw;}
+    .cover-content .scrub-title{color:var(--text);}
+
+    /* Rotate-device hint: CSS-only (the orientation media feature
+       re-evaluates live on rotation, no JS/listener needed), shown only on
+       small touch-width portrait viewports, inside the cover. */
+    .rotate-hint{display:none;}
+    @media (max-width:860px) and (orientation:portrait){
+      .rotate-hint{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:28px;color:var(--text-dim);font-size:13px;letter-spacing:0.02em;}
+      .rotate-hint svg{flex-shrink:0;animation:rotate-hint-swing 2.2s ease-in-out infinite;}
+    }
+    @keyframes rotate-hint-swing{0%,100%{transform:rotate(0deg);}50%{transform:rotate(-90deg);}}
+
+    /* Shared section shell */
+    .section{padding:100px 6vw;}
+    .section-alt{background:var(--bg-alt);border-top:1px solid var(--line);border-bottom:1px solid var(--line);}
+    .section-inner{max-width:1280px;margin:0 auto;}
+    .kicker{font-size:12px;letter-spacing:0.3em;text-transform:uppercase;color:var(--accent-bright);margin-bottom:16px;}
+    .h2{font-family:'Marcellus',serif;font-size:clamp(26px,4.5vw,42px);font-weight:400;margin:0 0 50px;}
+
+    /* INTRO */
+    .intro{padding:min(14vw,160px) 6vw 100px;}
+    .intro-grid{max-width:1280px;margin:0 auto;display:grid;grid-template-columns:1fr 1.15fr;gap:80px;align-items:center;}
+    .intro-photo{width:100%;aspect-ratio:3/4;max-width:460px;}
+    .intro-title{font-family:'Marcellus',serif;font-size:clamp(26px,4.5vw,44px);font-weight:400;line-height:1.15;margin:0 0 28px;}
+    .intro-p{font-size:16px;line-height:1.85;color:var(--text-dim);font-weight:300;margin:0 0 20px;}
+    .intro-p:last-child{margin-bottom:0;}
+
+    /* DESTAQUES */
+    .cards-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:48px;}
+    .card-title{font-family:'Marcellus',serif;font-size:20px;color:var(--accent-bright);margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--line);}
+    .card-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:12px;color:var(--text-dim);font-weight:300;font-size:15px;line-height:1.5;}
+    .story-text{color:var(--text-dim);font-weight:300;font-size:15px;line-height:1.7;margin:0 0 12px;}
+    .story-text:last-child{margin-bottom:0;}
+    .story-text strong{color:var(--text);font-weight:600;}
+    .story-note{font-size:13px;font-style:italic;opacity:0.8;}
+    .callout{border-left:2px solid var(--accent);padding:26px 30px;background:rgba(138,31,43,0.08);}
+    .callout .card-title{color:var(--text);border-bottom:none;padding-bottom:0;}
+
+    /* GALLERY */
+    .gallery-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));grid-auto-rows:120px;gap:20px;}
+    .gal-1{grid-column:span 3;grid-row:span 3;}
+    .gal-2{grid-column:span 2;grid-row:span 3;}
+    .gal-3{grid-column:span 1;grid-row:span 3;}
+    .gal-4{grid-column:span 2;grid-row:span 2;}
+    .gal-5{grid-column:span 2;grid-row:span 2;}
+    .gal-6{grid-column:span 2;grid-row:span 2;}
+    .gal-7{grid-column:span 2;grid-row:span 2;}
+    .gal-8{grid-column:span 2;grid-row:span 2;}
+    .gal-9{grid-column:span 2;grid-row:span 2;}
+
+    /* FICHA TECNICA */
+    .ficha-wrap{max-width:1000px;}
+    .ficha-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:60px;}
+    .spec-row{display:flex;justify-content:space-between;padding:20px 0;border-bottom:1px solid var(--line);}
+    .spec-label{color:var(--text-dim);font-weight:300;}
+    .spec-value{text-align:right;}
+
+    /* FOOTER */
+    .footer-top{max-width:1280px;margin:0 auto;display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:24px;}
+    .footer-name{font-family:'Marcellus',serif;font-size:28px;margin-bottom:6px;}
+    .footer-sub{color:var(--text-dim);font-size:14px;font-weight:300;}
+    .footer-price{font-family:'Marcellus',serif;font-size:32px;color:var(--accent-bright);}
+    .footer-bottom{max-width:1280px;margin:60px auto 0;padding-top:24px;border-top:1px solid var(--line);font-size:12px;color:var(--text-dim);opacity:0.6;}
+
+    /* Smartphone breakpoint */
+    @media (max-width: 860px){
+      .section{padding:64px 6vw;}
+      .intro{padding:72px 6vw 56px;}
+      .intro-grid{grid-template-columns:1fr;gap:36px;}
+      .intro-photo{max-width:360px;margin:0 auto;}
+      .gallery-grid{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:150px;gap:12px;}
+      .gal-1{grid-column:span 2;grid-row:span 2;}
+      .gal-2{grid-column:span 1;grid-row:span 2;}
+      .gal-3{grid-column:span 1;grid-row:span 2;}
+      .gal-4{grid-column:span 1;grid-row:span 2;}
+      .gal-5{grid-column:span 1;grid-row:span 2;}
+      .gal-6{grid-column:span 2;grid-row:span 2;}
+      .gal-7{grid-column:span 1;grid-row:span 2;}
+      .gal-8{grid-column:span 1;grid-row:span 2;}
+      .gal-9{grid-column:span 2;grid-row:span 2;}
+      .ficha-grid{grid-template-columns:1fr;column-gap:0;}
+      .h2{margin-bottom:34px;}
+      .scrub-dual-row{flex-direction:column;}
+      .scrub-video-half{width:100%;height:50%;}
+      .overlap-section{margin-top:-8vh;border-radius:20px 20px 0 0;}
+    }
+    @media (max-width: 420px){
+      .gallery-grid{grid-auto-rows:130px;}
+    }
+  </style>
+</helmet>
+
+<div class="page" style="--bg:{{bg}};--bg-alt:{{bgAlt}};--text:{{text}};--text-dim:{{textDim}};--line:{{line}};--accent:{{accent}};--accent-bright:{{accentBright}};">
+
+  <!-- COVER: opening title card, a beat before the Hero video starts -->
+  <section class="pin-wrap" id="cover" style="height:160vh;">
+    <div class="pin-pin cover-content">
+      <div class="eyebrow">Chevrolet · Onix Plus Premier II</div>
+      <h1 class="scrub-title">O popular que nunca foi comum.</h1>
+      <div class="rotate-hint">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="7" y="2" width="10" height="16" rx="2"></rect>
+          <path d="M21 12a9 9 0 1 1-2.6-6.4"></path>
+          <path d="M21 4v5h-5"></path>
+        </svg>
+        <span>Gire o aparelho para uma experiência melhor</span>
+      </div>
+      <div class="scrub-hint" style="position:static;transform:none;margin-top:32px;">Role para começar</div>
+    </div>
+  </section>
+
+  <!-- SCRUB 1: HERO / FRENTE -->
+  <section class="scrub-wrap" id="scrub-hero" style="height:280vh;">
+    <div class="scrub-pin">
+      <video id="hero-video" class="scrub-video" muted playsinline preload="auto" poster="assets/optimized/frente_superior_rua_16x9-poster.jpg">
+        <source src="assets/optimized/frente_superior_rua_16x9.mp4" type="video/mp4">
+      </video>
+      <div class="scrub-scrim"></div>
+      <div class="scrub-caption" data-range="0,0.34">
+        <div class="eyebrow">Chevrolet · 2020</div>
+        <h1 class="scrub-title">Onix Plus Premier II</h1>
+      </div>
+      <div class="scrub-caption" data-range="0.3,0.66">
+        <p class="scrub-desc">Vermelho Carmim · Motor 1.0 Turbo 116cv · Câmbio automático de 6 marchas. A versão topo de linha que trouxe tecnologia exclusiva para a categoria.</p>
+      </div>
+      <div class="scrub-caption" data-range="0.62,1">
+        <div class="price-block">
+          <span class="price">R$ 62.990</span>
+        </div>
+        <div class="meta-list">
+          <span>2020</span><span class="sep">/</span><span>115.000 km</span><span class="sep">/</span><span>Automático</span>
+        </div>
+      </div>
+      <div class="scrub-hint" id="scrub-hero-hint">Role para conhecer</div>
+    </div>
+  </section>
+
+  <!-- INTRO -->
+  <section class="intro overlap-section">
+    <div class="intro-grid">
+      <div class="intro-photo reveal">
+        <image-slot id="intro-photo" shape="rect" placeholder="Foto retrato do veículo" src="assets/optimized/frente_diagonal_direita_9x16.jpg"></image-slot>
+      </div>
+      <div class="reveal">
+        <div class="kicker">A versão topo de linha</div>
+        <h2 class="intro-title">Tecnologia e acabamento que não se encontram em qualquer compacto.</h2>
+        <p class="intro-p">Acabamento interno em duas cores, preto com caramelo, bancos totalmente em couro e ar-condicionado digital compõem um interior que surpreende pela categoria. Por fora, rodas de liga leve de 16", faróis com projetor e luzes diurnas em LED marcam a presença deste sedã compacto.</p>
+        <p class="intro-p">Segundo dono, religiosamente revisado a cada 10.000 Km, pronto para uma nova jornada.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- DESTAQUES -->
+  <section class="section section-alt">
+    <div class="section-inner">
+      <div class="kicker">Destaques</div>
+      <h2 class="h2" style="max-width:640px;">Tudo o que o topo de linha oferece</h2>
+      <div class="cards-grid">
+        <div>
+          <div class="card-title">Segurança</div>
+          <ul class="card-list">
+            <li>6 airbags (frontais, laterais e de cortina)</li>
+            <li>Controle de estabilidade e tração</li>
+            <li>Alerta de ponto cego</li>
+          </ul>
+        </div>
+        <div>
+          <div class="card-title">Conforto</div>
+          <ul class="card-list">
+            <li>Ar-condicionado digital</li>
+            <li>Bancos com acabamento em couro</li>
+            <li>Carregador de smartphone sem fio</li>
+          </ul>
+        </div>
+        <div>
+          <div class="card-title">Tecnologia</div>
+          <ul class="card-list">
+            <li>Assistente de estacionamento Easy Park</li>
+            <li>Sistema de concierge e segurança OnStar</li>
+            <li>Wi-Fi nativo</li>
+          </ul>
+        </div>
+        <div>
+          <div class="card-title">Design Externo</div>
+          <ul class="card-list">
+            <li>Rodas de liga leve de 16 polegadas</li>
+            <li>Faróis com projetor e luzes diurnas (DRL)</li>
+            <li>Lanternas em LED</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCRUB 2: EXTERIOR + INTERIOR, LADO A LADO -->
+  <section class="scrub-wrap" id="scrub-dual" style="height:240vh;">
+    <div class="scrub-pin">
+      <div class="scrub-dual-row">
+        <div class="scrub-video-half">
+          <video id="video-external" class="scrub-video" muted playsinline preload="auto" poster="assets/optimized/lateral_esquerda_rua_9x16-poster.jpg">
+            <source src="assets/optimized/lateral_esquerda_rua_9x16.mp4" type="video/mp4">
+          </video>
+          <div class="scrub-scrim"></div>
+          <div class="scrub-caption" data-range="0,0.45">
+            <div class="kicker">Design Externo</div>
+            <h2 class="scrub-heading">Presença que se nota de longe</h2>
+          </div>
+          <div class="scrub-caption" data-range="0.4,1">
+            <ul class="scrub-list">
+              <li>Rodas de liga leve de 16 polegadas</li>
+              <li>Faróis com projetor e luzes diurnas (DRL)</li>
+              <li>Lanternas em LED</li>
+            </ul>
+          </div>
+        </div>
+        <div class="scrub-video-half">
+          <video id="video-internal" class="scrub-video" muted playsinline preload="auto" poster="assets/optimized/interior_frontal_9x16-poster.jpg">
+            <source src="assets/optimized/interior_frontal_9x16.mp4" type="video/mp4">
+          </video>
+          <div class="scrub-scrim"></div>
+          <div class="scrub-caption" data-range="0,0.45">
+            <div class="kicker">Conforto &amp; Tecnologia</div>
+            <h2 class="scrub-heading">Por dentro, surpreende</h2>
+          </div>
+          <div class="scrub-caption" data-range="0.4,1">
+            <ul class="scrub-list">
+              <li>Bancos totalmente em couro</li>
+              <li>Ar-condicionado digital</li>
+              <li>Carregador de smartphone sem fio</li>
+              <li>Assistente Easy Park e segurança OnStar</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="scrub-hint">Continue rolando</div>
+    </div>
+  </section>
+
+  <!-- GALLERY -->
+  <section class="section section-alt overlap-section">
+    <div class="section-inner">
+      <div class="kicker">Galeria</div>
+      <h2 class="h2">Cada ângulo, em detalhe</h2>
+      <div class="gallery-grid">
+        <div class="gal-1"><image-slot id="gal-1" shape="rect" placeholder="Foto horizontal" src="assets/optimized/lateral_esquerda_rua_16x9.jpg"></image-slot></div>
+        <div class="gal-2"><image-slot id="gal-2" shape="rect" placeholder="Foto retrato" src="assets/optimized/trazeira_9x16.jpg"></image-slot></div>
+        <div class="gal-3"><image-slot id="gal-3" shape="rect" placeholder="Foto retrato" src="assets/optimized/frente_superior_9x16.jpg"></image-slot></div>
+        <div class="gal-4"><image-slot id="gal-4" shape="rect" placeholder="Foto retrato" src="assets/optimized/frente_9x16.jpg"></image-slot></div>
+        <div class="gal-5"><image-slot id="gal-5" shape="rect" placeholder="Foto retrato" src="assets/optimized/frente_diagonal_esquerda9x16.jpg"></image-slot></div>
+        <div class="gal-6"><image-slot id="gal-6" shape="rect" placeholder="Foto horizontal" src="assets/optimized/trazeira_diagonal_direita_rua_16x9.jpg"></image-slot></div>
+        <div class="gal-7"><image-slot id="gal-7" shape="rect" placeholder="Foto horizontal" src="assets/optimized/frente_diagonal_direita_rua_16x9.jpg"></image-slot></div>
+        <div class="gal-8"><image-slot id="gal-8" shape="rect" placeholder="Foto horizontal" src="assets/optimized/trazeira_diagonal_esquerda_rua_16x9.jpg"></image-slot></div>
+        <div class="gal-9"><image-slot id="gal-9" shape="rect" placeholder="Foto horizontal" src="assets/optimized/lateral_direita_diagonal_frente_16x9.jpg"></image-slot></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FICHA TECNICA (sticky-pinned so the night divider below can slide up and cover it) -->
+  <section class="pin-wrap" id="pin-ficha" style="height:160vh;">
+    <div class="pin-pin">
+      <div class="section ficha-wrap" style="margin:0 auto;">
+        <div class="kicker">Ficha técnica</div>
+        <h2 class="h2">Sob o capô</h2>
+        <div class="ficha-grid">
+          <div class="spec-row"><span class="spec-label">Motor</span><span class="spec-value">1.0 Turbo Flex, 3 cilindros</span></div>
+          <div class="spec-row"><span class="spec-label">Potência</span><span class="spec-value">116 cv (etanol/gasolina)</span></div>
+          <div class="spec-row"><span class="spec-label">Torque</span><span class="spec-value">16,8 kgfm (etanol) / 16,3 kgfm (gasolina)</span></div>
+          <div class="spec-row"><span class="spec-label">Transmissão</span><span class="spec-value">Automática de 6 marchas</span></div>
+          <div class="spec-row"><span class="spec-label">Porta-malas</span><span class="spec-value">469 litros</span></div>
+          <div class="spec-row"><span class="spec-label">Ano / Cor</span><span class="spec-value">2020 · Vermelho Carmim</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- NIGHT DIVIDER: title card marking the start of the night sequence -->
+  <section class="night-divider overlap-section">
+    <h2 class="scrub-title">Sob a luz da noite</h2>
+  </section>
+
+  <!-- SCRUB NIGHT 1: FARÓIS DIANTEIROS -->
+  <section class="scrub-wrap" id="scrub-night-1" style="height:230vh;">
+    <div class="scrub-pin">
+      <video class="scrub-video" muted playsinline preload="auto" poster="assets/optimized/exterior_frontal_para_ligar_farol_dianteiro_levemente_inclinado_16x9-poster.jpg">
+        <source src="assets/optimized/exterior_frontal_para_ligar_farol_dianteiro_levemente_inclinado_16x9.mp4" type="video/mp4">
+      </video>
+      <div class="scrub-scrim"></div>
+      <div class="scrub-caption" data-range="0,0.45">
+        <h2 class="scrub-heading">Faróis com projetor e assinatura em LED</h2>
+      </div>
+      <div class="scrub-caption" data-range="0.4,1">
+        <p class="scrub-desc">Diferente das versões de entrada, que usam parábola halógena simples, o Premier II acende com projetor e assinatura em LED — presença que se impõe até no escuro.</p>
+      </div>
+      <div class="scrub-hint">Continue rolando</div>
+    </div>
+  </section>
+
+  <!-- SCRUB NIGHT 2: LANTERNAS TRASEIRAS -->
+  <section class="scrub-wrap" id="scrub-night-2" style="height:230vh;">
+    <div class="scrub-pin">
+      <video class="scrub-video" muted playsinline preload="auto" poster="assets/optimized/exterior_trazeiro_diagonal_para_ligar_farol_trazeiro_16x9-poster.jpg">
+        <source src="assets/optimized/exterior_trazeiro_diagonal_para_ligar_farol_trazeiro_16x9.mp4" type="video/mp4">
+      </video>
+      <div class="scrub-scrim"></div>
+      <div class="scrub-caption" data-range="0,0.5">
+        <h2 class="scrub-heading">Lanternas traseiras em LED</h2>
+      </div>
+      <div class="scrub-caption" data-range="0.45,1">
+        <p class="scrub-desc">Desenho interno exclusivo da versão de topo — identidade que se reconhece de longe, de dia ou de noite.</p>
+      </div>
+      <div class="scrub-hint">Continue rolando</div>
+    </div>
+  </section>
+
+  <!-- SCRUB NIGHT 3: TRANCA + PISCA -->
+  <section class="scrub-wrap" id="scrub-night-3" style="height:230vh;">
+    <div class="scrub-pin">
+      <video class="scrub-video" muted playsinline preload="auto" poster="assets/optimized/exterior_frontal_diagonal_direita_tranca_porta_pisca_luz_16x9-poster.jpg">
+        <source src="assets/optimized/exterior_frontal_diagonal_direita_tranca_porta_pisca_luz_16x9.mp4" type="video/mp4">
+      </video>
+      <div class="scrub-scrim"></div>
+      <div class="scrub-caption" data-range="0,0.45">
+        <h2 class="scrub-heading">Chave no bolso já basta</h2>
+      </div>
+      <div class="scrub-caption" data-range="0.4,1">
+        <ul class="scrub-list">
+          <li>Chave presencial (Easy Entry)</li>
+          <li>Partida por botão (Easy Start)</li>
+          <li>Sistema OnStar de concierge e segurança</li>
+        </ul>
+      </div>
+      <div class="scrub-hint">Continue rolando</div>
+    </div>
+  </section>
+
+  <!-- SCRUB NIGHT DUAL: INTERIOR FRENTE + TRASEIRO -->
+  <section class="scrub-wrap" id="scrub-night-dual" style="height:250vh;">
+    <div class="scrub-pin">
+      <div class="scrub-dual-row">
+        <div class="scrub-video-half">
+          <video class="scrub-video" muted playsinline preload="auto" poster="assets/optimized/interior_frente_9x16-poster.jpg">
+            <source src="assets/optimized/interior_frente_9x16.mp4" type="video/mp4">
+          </video>
+          <div class="scrub-scrim"></div>
+          <div class="scrub-caption" data-range="0,0.5">
+            <h2 class="scrub-heading">Interior Preto e Caramelo</h2>
+          </div>
+          <div class="scrub-caption" data-range="0.45,1">
+            <p class="scrub-desc">Acabamento bicolor exclusivo do pacote Premier II — revestimento sintético que mescla tecido e couro, com apliques caramelo no painel e nas portas.</p>
+          </div>
+        </div>
+        <div class="scrub-video-half">
+          <video class="scrub-video" muted playsinline preload="auto" poster="assets/optimized/interior_passageiro_trazeiro_esquerdo_16x9-poster.jpg">
+            <source src="assets/optimized/interior_passageiro_trazeiro_esquerdo_16x9.mp4" type="video/mp4">
+          </video>
+          <div class="scrub-scrim"></div>
+          <div class="scrub-caption" data-range="0,0.5">
+            <h2 class="scrub-heading">Espaço para toda a família</h2>
+          </div>
+          <div class="scrub-caption" data-range="0.45,1">
+            <p class="scrub-desc">2,60 m de entre-eixos garantem espaço de sobra para as pernas no banco de trás.</p>
+          </div>
+        </div>
+      </div>
+      <div class="scrub-hint">Continue rolando</div>
+    </div>
+  </section>
+
+  <!-- SCRUB NIGHT 5: CONFORTO TRASEIRO -->
+  <section class="scrub-wrap" id="scrub-night-5" style="height:230vh;">
+    <div class="scrub-pin">
+      <video class="scrub-video" muted playsinline preload="auto" poster="assets/optimized/interior_passageiro_trazeiro_diagonal_16x9-poster.jpg">
+        <source src="assets/optimized/interior_passageiro_trazeiro_diagonal_16x9.mp4" type="video/mp4">
+      </video>
+      <div class="scrub-scrim"></div>
+      <div class="scrub-caption" data-range="0,0.45">
+        <h2 class="scrub-heading">Conforto em cada detalhe</h2>
+      </div>
+      <div class="scrub-caption" data-range="0.4,1">
+        <ul class="scrub-list">
+          <li>Ar-condicionado digital automático de uma zona</li>
+          <li>Bancos com revestimento sintético bicolor</li>
+          <li>Carregador de smartphone por indução</li>
+        </ul>
+      </div>
+      <div class="scrub-hint">Continue rolando</div>
+    </div>
+  </section>
+
+  <!-- SCRUB NIGHT 6: TECNOLOGIA -->
+  <section class="scrub-wrap" id="scrub-night-6" style="height:230vh;">
+    <div class="scrub-pin">
+      <video class="scrub-video" muted playsinline preload="auto" poster="assets/optimized/interior_passageiro_trazeiro_para_painel_central_frontal_16x9-poster.jpg">
+        <source src="assets/optimized/interior_passageiro_trazeiro_para_painel_central_frontal_16x9.mp4" type="video/mp4">
+      </video>
+      <div class="scrub-scrim"></div>
+      <div class="scrub-caption" data-range="0,0.45">
+        <h2 class="scrub-heading">Conectividade que impressiona</h2>
+      </div>
+      <div class="scrub-caption" data-range="0.4,1">
+        <ul class="scrub-list">
+          <li>Wi-Fi nativo 4G para até 7 dispositivos</li>
+          <li>Central MyLink de 7", compatível com Apple CarPlay e Android Auto</li>
+          <li>Assistente Easy Park e segurança OnStar</li>
+        </ul>
+      </div>
+      <div class="scrub-hint">Continue rolando</div>
+    </div>
+  </section>
+
+  <!-- NIGHT GALLERY -->
+  <section class="section section-alt overlap-section">
+    <div class="section-inner">
+      <div class="kicker">Sob as luzes da noite</div>
+      <h2 class="h2">Cada detalhe, à noite</h2>
+      <div class="gallery-grid">
+        <div class="gal-1"><image-slot id="gal-n1" shape="rect" placeholder="Foto horizontal" src="assets/optimized/exterior_frontal_diagonal_esquerdo_farol_aceso_16x9.jpg"></image-slot></div>
+        <div class="gal-2"><image-slot id="gal-n2" shape="rect" placeholder="Foto horizontal" src="assets/optimized/interior_frontal_visao_bancos_dianteiros_e_trazeiros_diagonal_16x9.jpg"></image-slot></div>
+        <div class="gal-3"><image-slot id="gal-n3" shape="rect" placeholder="Foto horizontal" src="assets/optimized/exterior_trazeiro_diagonal_direito_farol_aceso_16x9.jpg"></image-slot></div>
+        <div class="gal-4"><image-slot id="gal-n4" shape="rect" placeholder="Foto horizontal" src="assets/optimized/exterior_porta_malas_aberto_diagonal_direita_16x9.jpg"></image-slot></div>
+        <div class="gal-5"><image-slot id="gal-n5" shape="rect" placeholder="Foto retrato" src="assets/optimized/interio_painel_easylink_9x16.jpg"></image-slot></div>
+        <div class="gal-6"><image-slot id="gal-n6" shape="rect" placeholder="Foto horizontal" src="assets/optimized/exterior_roda_dianteira_direita_16x9.jpg"></image-slot></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HISTÓRIA E DETALHES -->
+  <section class="section">
+    <div class="section-inner">
+      <div class="kicker">Sobre este Onix</div>
+      <h2 class="h2" style="max-width:760px;">Vermelho Carmim, interior Caramelo — uma combinação rara</h2>
+      <p class="story-text" style="max-width:820px;font-size:16px;margin-bottom:56px;">O Chevrolet Onix Plus Premier II 2020 nesta configuração é uma das combinações mais raras, elegantes e valorizadas dessa geração do sedã. A variação "Premier II" (pacote <strong>R7M</strong>) era o topo de linha absoluto do modelo no ano de seu lançamento — reunimos abaixo todos os detalhes técnicos, equipamentos, consumo e particularidades desta versão exata.</p>
+
+      <div class="cards-grid" style="margin-bottom:56px;">
+        <div>
+          <div class="card-title">Estética e interior</div>
+          <p class="story-text">No lançamento da linha 2020, a Chevrolet ofereceu duas opções de acabamento interno para a versão Premier: o pacote Preto/Cinza, mais tradicional, e o <strong>Preto e Caramelo (Maple Sugar)</strong> deste veículo — revestimento sintético bicolor nos bancos (mesclando tecido e couro), com apliques no painel texturizado e nas portas na cor caramelo.</p>
+          <p class="story-text">A cor externa <strong>Vermelho Carmim</strong>, um tom metálico mais fechado e sofisticado, casa perfeitamente com o interior caramelo — um aspecto raro na categoria de sedãs compactos.</p>
+        </div>
+        <div>
+          <div class="card-title">Motorização e desempenho</div>
+          <ul class="card-list">
+            <li>Motor 1.0 Turbo, 3 cilindros, 12V (injeção flex indireta multiponto)</li>
+            <li>116 cv a 5.500 rpm (gasolina ou etanol)</li>
+            <li>16,3 kgfm (gasolina) / 16,8 kgfm (etanol), já a partir de 2.000 rpm</li>
+            <li>Câmbio automático de 6 marchas com trocas manuais (Active Select)</li>
+            <li>0 a 100 km/h em ~10,4s · Velocidade máxima de 187 km/h</li>
+            <li>Peso de 1.120 kg — retomadas espertas na cidade e na estrada</li>
+          </ul>
+        </div>
+        <div>
+          <div class="card-title">Consumo (Inmetro)</div>
+          <ul class="card-list">
+            <li>Cidade: 8,6 km/l (etanol) · 12,0 km/l (gasolina)</li>
+            <li>Estrada: 10,9 km/l (etanol) · 15,0 km/l (gasolina)</li>
+            <li>Tanque de 44 litros</li>
+            <li class="story-note">Em estrada com velocidade constante, muitos donos relatam médias de gasolina acima de 17 km/l.</li>
+          </ul>
+        </div>
+        <div>
+          <div class="card-title">Tecnologia e conectividade</div>
+          <ul class="card-list">
+            <li>Wi-Fi nativo 4G (chip Claro), até 7 dispositivos simultâneos</li>
+            <li>Central MyLink de 7", com Apple CarPlay e Android Auto</li>
+            <li>Sistema OnStar de assistência ativa e concierge</li>
+            <li>Carregador de smartphone por indução no console central</li>
+          </ul>
+        </div>
+        <div>
+          <div class="card-title">Equipamentos exclusivos Premier II</div>
+          <ul class="card-list">
+            <li>Easy Park — assistente de estacionamento automático</li>
+            <li>Alerta de ponto cego nos retrovisores</li>
+            <li>Ar-condicionado digital automático de uma zona</li>
+            <li>Sensores de estacionamento dianteiros, traseiros e laterais</li>
+            <li>Faróis com projetor e assinatura em LED</li>
+            <li>Lanternas traseiras em LED com desenho exclusivo</li>
+            <li>Rodas de liga leve de 16" com acabamento diamantado</li>
+            <li>Chave presencial (Easy Entry) e partida por botão (Easy Start)</li>
+            <li>6 airbags — frontais, laterais e de cortina</li>
+            <li>Controles de tração e estabilidade + assistente de partida em rampa</li>
+          </ul>
+        </div>
+        <div>
+          <div class="card-title">Dimensões e capacidades</div>
+          <div>
+            <div class="spec-row"><span class="spec-label">Comprimento</span><span class="spec-value">4,47 m</span></div>
+            <div class="spec-row"><span class="spec-label">Entre-eixos</span><span class="spec-value">2,60 m</span></div>
+            <div class="spec-row"><span class="spec-label">Largura</span><span class="spec-value">1,73 m</span></div>
+            <div class="spec-row"><span class="spec-label">Porta-malas</span><span class="spec-value">469 litros</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout">
+        <div class="card-title">Ponto de atenção na manutenção</div>
+        <p class="story-text"><strong>Correia dentada banhada a óleo:</strong> este motor usa correia dentada que roda dentro do óleo — o cuidado deve ser redobrado, usando estritamente o óleo especificado pela GM (informado na tampa do óleo do motor) e respeitando rigorosamente o prazo de troca. Óleo incorreto ou vencido pode fazer a correia descascar e entupir o pescador do motor.</p>
+      </div>
+
+      <p class="story-text" style="max-width:820px;font-size:16px;margin-top:40px;">Um sedã moderno, muito seguro — 5 estrelas no Latin NCAP — econômico e que chama a atenção pelo visual diferenciado do interior caramelo.</p>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <section class="section section-alt" style="padding:90px 6vw 60px;">
+    <div class="footer-top">
+      <div>
+        <div class="footer-name">Onix Plus Premier II</div>
+        <div class="footer-sub">Vermelho Carmim · 2020 · 115.000 km · Segundo dono · Pronto para sua próxima história</div>
+      </div>
+      <div class="footer-price">R$ 62.990</div>
+    </div>
+    <div class="footer-bottom">Anúncio particular · Reservado aos selecionados</div>
+  </section>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;accentColor&quot;: {&quot;editor&quot;: &quot;color&quot;, &quot;default&quot;: &quot;#8a1f2b&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;options&quot;: [&quot;#8a1f2b&quot;, &quot;#6f1420&quot;, &quot;#b6293a&quot;, &quot;#7a1e1e&quot;]}, &quot;accentBrightColor&quot;: {&quot;editor&quot;: &quot;color&quot;, &quot;default&quot;: &quot;#c23347&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;options&quot;: [&quot;#c23347&quot;, &quot;#d94255&quot;, &quot;#e0a458&quot;, &quot;#c9a227&quot;]}}">
+class Component extends DCLogic {
+  renderVals() {
+    const accent = this.props.accentColor ?? '#8a1f2b';
+    return {
+      bg: '#0c0b0d',
+      bgAlt: '#151316',
+      text: '#f2ece2',
+      textDim: '#b3aaa0',
+      line: 'rgba(242,236,226,0.12)',
+      accent,
+      accentBright: this.props.accentBrightColor ?? '#c23347',
+    };
+  }
+
+  componentDidMount() {
+    this._scrollTriggers = [];
+    // The DC runtime finalizes/swaps the rendered DOM once shortly after
+    // this first mount (its own template-streaming settling, unrelated to
+    // our component's own lifecycle) — a ScrollTrigger bound to a trigger
+    // element from THIS pass gets silently auto-killed once that swap
+    // detaches it. Deferring setup to the window `load` event (by which
+    // point that swap has already happened) avoids the race entirely.
+    const init = () => { this._setupAnimations(); this._setupScrubVideos(); this._setupOverlapSections(); };
+    if (document.readyState === 'complete') init();
+    else window.addEventListener('load', init, { once: true });
+  }
+
+  componentWillUnmount() {
+    if (this._scrollTriggers) this._scrollTriggers.forEach((st) => st.kill());
+  }
+
+  // Smooth scroll-triggered reveals for the non-video sections (Intro,
+  // Destaques, Galeria, Ficha Técnica): each fades/slides up the first
+  // time it nears the viewport. Falls back to plain (already-visible)
+  // content if the GSAP files failed to load, since nothing here is
+  // CSS-hidden by default.
+  _setupAnimations() {
+    const gsap = window.gsap;
+    const ScrollTrigger = window.ScrollTrigger;
+    if (!gsap) return;
+    if (ScrollTrigger) gsap.registerPlugin(ScrollTrigger);
+
+    gsap.utils.toArray('.reveal').forEach((el) => {
+      const tween = gsap.from(el, {
+        opacity: 0, y: 36, duration: 0.9, ease: 'power3.out',
+        scrollTrigger: { trigger: el, start: 'top 85%' },
+      });
+      if (tween.scrollTrigger) this._scrollTriggers.push(tween.scrollTrigger);
+    });
+
+    document.querySelectorAll('.cards-grid, .gallery-grid, .ficha-grid').forEach((group) => {
+      if (!group.children.length) return;
+      const tween = gsap.from(group.children, {
+        opacity: 0, y: 30, duration: 0.8, ease: 'power3.out', stagger: 0.08,
+        scrollTrigger: { trigger: group, start: 'top 85%' },
+      });
+      if (tween.scrollTrigger) this._scrollTriggers.push(tween.scrollTrigger);
+    });
+  }
+
+  // GTA6-style scroll-scrub: each of the 3 vehicle videos never plays on
+  // its own — `position:sticky` pins it full-screen while its section
+  // scrolls past, and the scroll progress through that section is mapped
+  // directly onto `video.currentTime`. Scroll down and the clip steps
+  // forward; scroll back up and it steps backward. Captions layered over
+  // the video cross-fade in/out at fixed progress windows (`data-range`
+  // on each `.scrub-caption`), presenting the car's story a beat at a
+  // time instead of all at once.
+  _setupScrubVideos() {
+    const ScrollTrigger = window.ScrollTrigger;
+    const FADE = 0.08;
+    // Narrow-viewport gate on top of touch detection: touch-capable
+    // laptops/tablets used with a mouse or trackpad should keep the
+    // already-tuned default scroll feel — this is meant for phones.
+    const isTouch = (('ontouchstart' in window) || navigator.maxTouchPoints > 0) && window.matchMedia('(max-width: 860px)').matches;
+
+    // NOTE: ScrollTrigger.normalizeScroll(true) was tried here and made
+    // things worse, not better — it takes over touch-driven scrolling
+    // entirely, and in this project's environment the page kept visually
+    // scrolling via touch-drag while ScrollTrigger's own progress never
+    // updated (only a real scrollbar drag still worked). Confirmed both by
+    // the reported symptom and by A/B testing scroll-driven progress with
+    // it on vs. off. The actual fix is the `touch-action:pan-y` CSS below
+    // (see .scrub-pin/.scrub-video/etc.) — without it, touch-drag over a
+    // full-bleed <video>/pinned element can be treated as a viewport
+    // pan/zoom gesture instead of a real page scroll, which visually moves
+    // the page but never fires the `scroll` events ScrollTrigger listens
+    // for. `touch-action:pan-y` forces touch-drag there to always resolve
+    // to genuine vertical scrolling.
+
+    // iOS Safari can refuse to decode/render new frames for a <video> that
+    // has never been started, even when only `currentTime` is being set —
+    // a single silent play/pause on the first touch "unlocks" decoding for
+    // every scrub video without ever visibly auto-playing anything.
+    if (isTouch) {
+      const unlock = () => {
+        document.querySelectorAll('.scrub-video').forEach((video) => {
+          video.play().then(() => video.pause()).catch(() => {});
+        });
+        window.removeEventListener('touchstart', unlock);
+      };
+      window.addEventListener('touchstart', unlock, { once: true, passive: true });
+    }
+
+    // Each caption grows, fades in and rises into place as progress enters
+    // its window; once inside, it holds steady; leaving the window it
+    // keeps rising while fading out, instead of dropping back down.
+    const applyCaption = (cap, progress) => {
+      const [start, end] = cap.dataset.range.split(',').map(Number);
+      let opacity = 0, y = 28, scale = 0.94;
+      if (progress < start) {
+        opacity = 0; y = 28; scale = 0.94;
+      } else if (progress < start + FADE) {
+        const k = (progress - start) / FADE;
+        opacity = k; y = 28 * (1 - k); scale = 0.94 + 0.06 * k;
+      } else if (progress <= end - FADE) {
+        opacity = 1; y = 0; scale = 1;
+      } else if (progress <= end) {
+        const k = (progress - (end - FADE)) / FADE;
+        opacity = 1 - k; y = -28 * k; scale = 1;
+      } else {
+        opacity = 0; y = -28; scale = 1;
+      }
+      cap.style.opacity = opacity;
+      cap.style.transform = `translateY(${y}px) scale(${scale})`;
+    };
+
+    document.querySelectorAll('.scrub-wrap').forEach((wrap) => {
+      const videos = Array.from(wrap.querySelectorAll('video'));
+      const captions = Array.from(wrap.querySelectorAll('.scrub-caption'));
+      const hint = wrap.querySelector('.scrub-hint');
+      videos.forEach((v) => v.pause());
+
+      const applyProgress = (progress) => {
+        videos.forEach((video) => {
+          if (video.duration && !Number.isNaN(video.duration)) {
+            video.currentTime = progress * video.duration;
+          }
+        });
+        captions.forEach((cap) => applyCaption(cap, progress));
+        if (hint) hint.style.opacity = progress < 0.05 ? 0.6 : 0;
+      };
+
+      applyProgress(0);
+
+      if (ScrollTrigger) {
+        const st = ScrollTrigger.create({
+          trigger: wrap,
+          start: 'top top',
+          end: 'bottom bottom',
+          scrub: 0.4,
+          onUpdate: (self) => applyProgress(self.progress),
+        });
+        this._scrollTriggers.push(st);
+      }
+    });
+  }
+
+  // Parallax overlap: the section right after a scrub video (Intro after
+  // the Hero; Galeria after the dual Exterior/Interior block) slides up
+  // and covers it while it's still pinned underneath. The CSS negative
+  // margin lets it start entering earlier than its natural flow position;
+  // this eases a matching translateY back to 0 as the section settles, so
+  // the motion reads as a deliberate slide rather than a sudden snap.
+  _setupOverlapSections() {
+    const ScrollTrigger = window.ScrollTrigger;
+    const gsap = window.gsap;
+    if (!ScrollTrigger || !gsap) return;
+    const LIFT = window.innerWidth <= 860 ? 8 : 14;
+
+    document.querySelectorAll('.overlap-section').forEach((section) => {
+      gsap.set(section, { y: LIFT + 'vh' });
+      const st = ScrollTrigger.create({
+        trigger: section,
+        start: 'top bottom',
+        end: 'top top',
+        scrub: 0.3,
+        onUpdate: (self) => gsap.set(section, { y: (1 - self.progress) * LIFT + 'vh' }),
+      });
+      this._scrollTriggers.push(st);
+    });
+  }
+}
+</script>
+</body>
+</html>
